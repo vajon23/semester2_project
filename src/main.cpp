@@ -7,7 +7,7 @@
 #include <DFRobot_Heartrate.h>
 
 
-void Data_line(unsigned long int time, int bpm_breathing, int bpm_PPG, float celsius1, float celsius2, float delta1, float delta2); // Puts together the data line that is saved to the SD card or showed in the monitor
+void Data_line(unsigned long int time, int bpm_breathing, int bpm_PPG, float celsius1, float celsius2, float delta1, float delta2); // Outputs the data line to the serial monitor
 void Initial_values(float celsius1, float celsius2, float& Initial_AM_value, float& Person_initial_1, float& Person_initial_2); // calculates Initial values for temperature sensors and accelerometer
 unsigned long int time=0; // used for time stamp 
 /***************PPG Sensor ****************/
@@ -38,27 +38,21 @@ bool reading=false;
 static int timer_flag2 = 0; // timer for data output rate
 void set_timer_data(unsigned long int millisec);
 void Initialization_SD(void); // says if the SD card is working properly
-void Write_to_file(char* file_name, unsigned long int time, int bpm_breathing, int bpm_PPG, float celsius1, float celsius2, float delta1, float delta2); // writes data_string into file with file_name
-
-float max, min;
+void Write_to_file(char* file_name, unsigned long int time, int bpm_breathing, int bpm_PPG, float celsius1, float celsius2, float delta1, float delta2); // saves data onto a file in the SD card with file_name 
 
 void setup(void) {
   Serial.begin(9600);
   Initiliazation_AM();
   Initialization_SD();
   Initial_values(celsius1, celsius2, Initial_AM_value, Person_initial_1, Person_initial_2);
-  Serial.print("offset ");Serial.print(Initial_AM_value);Serial.print("\n");
   while (!Serial) {
     ; // wait for serial port to connect.
   }
-  reading=true;
-  max=Initial_AM_value;
-  min=Initial_AM_value;
 }
 
 void loop() {
   /***************************RECORDING SETUP*************************/
-  if (!reading) {
+  if (!reading) { // Starts recording of data once gotten a start input
     char c = 0;
     Serial.readBytes(&c, 1);
     if (c=='S') {
@@ -67,7 +61,7 @@ void loop() {
     }
   } 
   else {
-    if (Serial.available()) {
+    if (Serial.available()) { // stops recording of data when gotten a stop input
       char c = 0;
       Serial.readBytes(&c, 1);
       if (c=='S') {
@@ -90,7 +84,7 @@ void loop() {
     else motion_flag = 0; // sets flag to 0 if the motion value is okay
 
     if(motion_flag==0){
-      if((average > (Initial_AM_value+reset_threshold)) || (average < (Initial_AM_value-reset_threshold) || bpm_breathing>26)){
+      if((average > (Initial_AM_value+reset_threshold)) || (average < (Initial_AM_value-reset_threshold) || bpm_breathing>26)){ // resets the initial offset once exceeded a certain motion threshold
           sum2 = 0;
           int idx=0;
           while(idx<20){
@@ -137,7 +131,7 @@ void loop() {
       Data_line(time, bpm_breathing, bpm_PPG, celsius1, celsius2, delta1, delta2);
       Write_to_file((char*)"/d.csv", time, bpm_breathing, bpm_PPG, celsius1, celsius2, delta1, delta2);
     }
-    set_timer_data(300);
+    set_timer_data(300); // output data rate 0.3 second
   }
 }
 void Temperatures(const int Pin1, const int Pin2, float& celsius1, float& celsius2){
