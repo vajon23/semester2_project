@@ -4,27 +4,21 @@
 #include <Arduino.h>
 #include <Adafruit_MMA8451.h>
 #include <Adafruit_Sensor.h>
+#include <DFRobot_Heartrate.h>
 
 
-String Data_line(unsigned long int time, int bpm_breathing, int bpm_PPG, float Person_initial_1, float Person_initial_2); // Puts together the data line that is saved to the SD card or showed in the monitor
+void Data_line(unsigned long int time, int bpm_breathing, int bpm_PPG, float celsius1, float celsius2, float delta1, float delta2); // Puts together the data line that is saved to the SD card or showed in the monitor
 void Initial_values(float celsius1, float celsius2, float& Initial_AM_value, float& Person_initial_1, float& Person_initial_2); // calculates Initial values for temperature sensors and accelerometer
 unsigned long int time=0; // used for time stamp 
-
 /***************PPG Sensor ****************/
-volatile float Tavrg = 0; //averaged period value used to calculate the freqeuncy (BPM)
-void PPG_period(void); // Interrupt routine
-volatile unsigned int first = 0; // flag for interrupt
-volatile long int t0;
-volatile float rawT; // Period between falling edges
-
+DFRobot_Heartrate Heartrate(ANALOG_MODE);
 /***************Temperature Sensors ****************/
 float Person_initial_1, Person_initial_2; // Person's initial temperature values from each sensor
 float celsius1, celsius2; // Person's current temperature values from each sensor
 void Temperatures(const int Pin1, const int Pin2, float& celsius1, float& celsius2); // Calculates the current temperature values (which are averaged)
-
 /***************Accelerometer ****************/
 Adafruit_MMA8451 mma = Adafruit_MMA8451();
- int bpm_breathing =0;
+int bpm_breathing =0;
 sensors_event_t event; // gives out values in m/s^2
 #define g_value 9.80665 // definition of g constant value
 long unsigned int t0_breath, t1_breath; // breathing in time of first and second breath
@@ -32,51 +26,51 @@ float Initial_AM_value; // Initial accelerometer vector V value
 int breath_counter = 0; // counts breaths
 int trigger = 1; // makes sures only one BPM value is calculated
 int period_flag = 0; // needed for breath period determination
-int timer_flag = 0; // if  set timerflag=1, activate timer
+static int timer_flag = 0; // if  set timerflag=1, activate timer
+static int timer_flag3 = 0; // timer flag for accelerometer offset reset
 void Initiliazation_AM(void); // says if the Accelerometer is working properly
 float Acceleration(void); // gives out an avareged value of 5 values from Accelerometer
 void set_timer(unsigned long int millisec); // set a timer in the background while not disturbing other functions
+void set_timer_AC_reset(unsigned long int millisec);
 float breathing_period(void); // calculates the period of the breathing 
 bool reading=false;
-
 /*********************SD_card***************************/
-File myFile; // used for remebering the text file that is being worked with in the SD card
-File root; // needed to get SD card directory() function
+static int timer_flag2 = 0; // timer for data output rate
+void set_timer_data(unsigned long int millisec);
 void Initialization_SD(void); // says if the SD card is working properly
-void printDirectory(File dir, int numTabs); // prints all the text file name that are in SD card
-void Check_existance(String file_name); // chech if that name file is in SD card
-void Read_whole_file(String file_name); // reads and prints out everything that is in a file
-void Write_to_file(String file_name, String data_string); // writes data_string into file with file_name
+void Write_to_file(char* file_name, unsigned long int time, int bpm_breathing, int bpm_PPG, float celsius1, float celsius2, float delta1, float delta2); // writes data_string into file with file_name
+
+float max, min;
 
 void setup(void) {
   Serial.begin(9600);
   Initiliazation_AM();
   Initialization_SD();
   Initial_values(celsius1, celsius2, Initial_AM_value, Person_initial_1, Person_initial_2);
-
+  Serial.print("offset ");Serial.print(Initial_AM_value);Serial.print("\n");
   while (!Serial) {
-    ; // wait for serial port to connect. Needed for native USB port only
+    ; // wait for serial port to connect.
   }
-  root = SD.open("/");
-  //printDirectory(root, 0);
-  //Check_existance("example.txt");
-  //Read_whole_file("example.txt");
-  //SD.remove("example.txt");// delete this file
-  pinMode(3, INPUT); // sets pin D3 as input for the PPG sensor
-  attachInterrupt(digitalPinToInterrupt(3), PPG_period, FALLING); // adds an interrupt that happens when there is a falling edge in the PPG sensor's signal
+  reading=true;
+  max=Initial_AM_value;
+  min=Initial_AM_value;
 }
 
 void loop() {
+  /***************************RECORDING SETUP*************************/
   if (!reading) {
-    auto a = Serial.readStringUntil('\n');
-    if (a==String("START")) {
+    char c = 0;
+    Serial.readBytes(&c, 1);
+    if (c=='S') {
       reading=true;
       Serial.println("Starting...");
     }
   } 
   else {
     if (Serial.available()) {
-      if (Serial.readStringUntil('\n')==String("STOP")) {
+      char c = 0;
+      Serial.readBytes(&c, 1);
+      if (c=='S') {
         reading=false;
         Serial.println("Stopping...");
       }
@@ -85,28 +79,41 @@ void loop() {
     /************************Accelerometer ************************/
     float breath_period;
     int motion_flag = 0; // used for filtering out high motion
-    float count_threshold = 0.005; // thereshold for breath counter
-    float motion_threshold = g_value; // thereshold for motion (if above, data is rejected)
+    float reset_threshold = 0.02;
+    float count_threshold = 0.006; // thereshold for breath counter
+    float motion_threshold = g_value*0.3; // thereshold for motion (if above, data is rejected)
+    float sum2;
     float average = Acceleration();
-    set_timer(1250);
+    set_timer(1000);
 
     if((average > (Initial_AM_value+motion_threshold)) || (average < (Initial_AM_value-motion_threshold))) motion_flag = 1; // sets flag to 1 if there is too much motion
     else motion_flag = 0; // sets flag to 0 if the motion value is okay
 
     if(motion_flag==0){
+      if((average > (Initial_AM_value+reset_threshold)) || (average < (Initial_AM_value-reset_threshold) || bpm_breathing>26)){
+          sum2 = 0;
+          int idx=0;
+          while(idx<20){
+            if(timer_flag3==0){
+              timer_flag3 = 1;
+              average = Acceleration();
+              sum2+=average;
+              idx++;
+            }
+            set_timer_AC_reset(10);
+          }
+          Initial_AM_value = sum2/float(20);
+          bpm_breathing = 16;
+      }
       if(timer_flag==0){
         if((average > (Initial_AM_value+count_threshold)) || (average < (Initial_AM_value-count_threshold))){ // checks if the acceleration is beyond breathing threshold to register a breath
           breath_counter++;
           breath_period = breathing_period();
-          timer_flag = 1; // activates a 1.5 second timer after registering a breathing motion to reduce multiple captures of one breath count
+          timer_flag = 1; // activates a 1 second timer after registering a breathing motion to reduce multiple captures of one breath count
         }
         if(period_flag == 0 && trigger!=1){
         bpm_breathing = 60000 / breath_period; // dividing 60 seconds by breath period to get breathing frequency per minute
         trigger=1;
-        //bpm_breathing+=saved;
-        //bpm_breathing/=2;
-        //Serial.print("BPM = ");Serial.print(bpm_breathing); Serial.print(" period = ");Serial.print(breath_period);Serial.print("\n");
-        //saved=bpm_breathing;
         }
       }
     }
@@ -114,26 +121,23 @@ void loop() {
   /**************************TEMPERATURE****************************************/
     const int Pin1 = A6, Pin2 = A7; // Temp sensor pin wire connected to analog pin 6
     Temperatures(Pin1, Pin2, celsius1, celsius2);
-  // float delta1 = celsius1 - Person_initial_1;//the change between the current temperature and the person's initial tempeperature values for both sensors
-  // float delta2 = celsius2 - Person_initial_2;
-
-    /*if (delta1 > x){   and also for delta2 just need to find the tresholds from that one research paper
-      stressed_lvl=1;
-    }
-    if (delta1 > y){
-      stressed_lvl=2;
-    }
-    if (delta1 > z){
-      stressed_lvl=3;
-    }*/
+    float delta1 = celsius1 - Person_initial_1;//the change between the current temperature and the person's initial tempeperature values for both sensors
+    float delta2 = celsius2 - Person_initial_2;
 
   /**************************PPG**************************************/
-    int bpm_PPG = 60000.0 / Tavrg; 
+   static int bpm_PPG;
+   Heartrate.getValue(A1); // reads analog (raw) value from the sensor
+   int hr = Heartrate.getRate();// compiles a value in BPM for hear rate
+   bpm_PPG = hr?hr:bpm_PPG; // keeps the last BPM value
+   
   /********************************PRINTING*******************************************/
     time = millis(); // time in ,mili seconds since start of measurement
-    String datastring = Data_line(time, bpm_breathing, bpm_PPG, celsius1, celsius2);
-    Serial.println(datastring);
-    Write_to_file("datalog_new.csv",datastring);
+    if(timer_flag2 == 0){
+      timer_flag2 = 1;
+      Data_line(time, bpm_breathing, bpm_PPG, celsius1, celsius2, delta1, delta2);
+      Write_to_file((char*)"/d.csv", time, bpm_breathing, bpm_PPG, celsius1, celsius2, delta1, delta2);
+    }
+    set_timer_data(300);
   }
 }
 void Temperatures(const int Pin1, const int Pin2, float& celsius1, float& celsius2){
@@ -157,14 +161,14 @@ void Temperatures(const int Pin1, const int Pin2, float& celsius1, float& celsiu
   celsius2 = mv2/10.0;  // the voltage rises 10mv when temp rises 1degreeC
 }
 
-String Data_line(unsigned long int time, int bpm_breathing, int bpm_PPG, float celsius1, float celsius2){
-  String dataString = "";
-  dataString +=String(time);dataString += ";";
-  dataString +=String(bpm_breathing);dataString += ";";
-  dataString += String(bpm_PPG);dataString += ";";
-  dataString +=String(celsius1);dataString += ";";
-  dataString +=String(celsius2);
-  return(dataString);
+void Data_line(unsigned long int time, int bpm_breathing, int bpm_PPG, float celsius1, float celsius2, float delta1, float delta2){
+  Serial.print(time);Serial.print(';');
+  Serial.print(bpm_breathing);Serial.print(';');
+  Serial.print(bpm_PPG);Serial.print(';');
+  Serial.print(celsius1);Serial.print(';');
+  Serial.print(celsius2);Serial.print(';');
+  Serial.print(delta1);Serial.print(';');
+  Serial.print(delta2);Serial.print('\n');
 }
 
 void Initiliazation_AM(void){
@@ -224,98 +228,58 @@ void Initialization_SD(void){
   Serial.println("initialization done.");
 }
 
-void printDirectory(File dir, int numTabs) {
-  while (true) {
-
-    File entry =  dir.openNextFile();
-    if (! entry) {
-      // no more files
-      break;
-    }
-    for (uint8_t i = 0; i < numTabs; i++) {
-      Serial.print('\t');
-    }
-    Serial.print(entry.name());
-    if (entry.isDirectory()) {
-      Serial.println("/");
-      printDirectory(entry, numTabs + 1);
-    } else {
-      // files have sizes, directories do not
-      Serial.print("\t\t");
-      Serial.println(entry.size(), DEC);
-    }
-    entry.close();
-  }
-}
-
-void Check_existance(String file_name){
-  if (SD.exists(file_name)) {
-    Serial.print(file_name);Serial.print(" exists.\n");
-  } else {
-    Serial.print(file_name);Serial.print(" doesn't exist.\n");
-  }
-}
-
-void Read_whole_file(String file_name){
-  //open the file for reading:
-  myFile = SD.open(file_name);
-  if (myFile) {
-    Serial.print(file_name);Serial.print(":\n");
-
-    // read from the file until there's nothing else in it:
-    while (myFile.available()) {
-      Serial.write(myFile.read());
-    }
-    // close the file:
-    myFile.close();
-  } else {
-    // if the file didn't open, print an error:
-    Serial.print("error opening ");Serial.print(file_name);
-  }
-}
-
-void Write_to_file(String file_name, String data_string){
+void Write_to_file(char* file_name, unsigned long int time, int bpm_breathing, int bpm_PPG, float celsius1, float celsius2, float delta1, float delta2){
   // open the file. note that only one file can be open at a time,
   // so you have to close this one before opening another.
-  myFile = SD.open(file_name, FILE_WRITE);
+  File myFile = SD.open(file_name, O_CREAT | O_APPEND | O_WRITE);
 
    //if the file opened okay, write to it:
   if (myFile) {
    // Serial.print("Writing to " ); Serial.print(file_name);Serial.print("...\n");
-    myFile.println(data_string); // this line writes in SD card
+    myFile.print(time);myFile.print(';');myFile.flush();
+    myFile.print(bpm_breathing);myFile.print(';');myFile.flush();
+    myFile.print(bpm_PPG);myFile.print(';');myFile.flush();
+    myFile.print(celsius1);myFile.print(';');myFile.flush();
+    myFile.print(celsius2);myFile.print('\n');myFile.flush(); // this line writes in SD card
     // close the file:
     myFile.close();
    // Serial.println("done.");
   } else {
     // if the file didn't open, print an error:
-    Serial.print("error opening ");Serial.print(file_name);
-  }
-}
-
-void PPG_period() { // Interrupt routine
-  if(first == 0) {
-    t0 = millis(); // saves time value of first falling edge
-    first = 1;
-//digitalWrite(LED_BUILTIN, 1);
-  }
-  else {
-    rawT = millis() - t0; // takes the time value of second falling edge and substracts the first = Period
-   // Tavrg += rawT;
-    //Tavrg /= 2;
-    Tavrg=rawT;
-  //digitalWrite(LED_BUILTIN, 0); 
-    first = 0;
+    Serial.print("error opening ");Serial.println(file_name);
   }
 }
 
 void set_timer(unsigned long int millisec){
-int t_start;
+  static long unsigned int t_start;
   if(timer_flag==1){
     t_start=millis();
     timer_flag=2;
   }
   if(timer_flag==2){
     if(t_start+millisec<millis()) timer_flag = 0;
+  }
+}
+
+void set_timer_data(unsigned long int millisec){
+  static long unsigned int t_start2;
+  if(timer_flag2==1){
+    t_start2=millis();
+    timer_flag2=2;
+  }
+  if(timer_flag2==2){
+    if(t_start2+millisec<millis()) timer_flag2 = 0;
+  }
+}
+
+void set_timer_AC_reset(unsigned long int millisec){
+  static long unsigned int t_start3;
+  if(timer_flag3==1){
+    t_start3=millis();
+    timer_flag3=2;
+  }
+  if(timer_flag3==2){
+    if(t_start3+millisec<millis()) timer_flag3 = 0;
   }
 }
 
