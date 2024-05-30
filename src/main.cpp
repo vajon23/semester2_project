@@ -8,11 +8,12 @@
 
 
 void Data_line(unsigned long int time, int bpm_breathing, int bpm_PPG, float celsius1, float celsius2, float delta1, float delta2); // Outputs the data line to the serial monitor
-void Initial_values(float celsius1, float celsius2, float& Initial_AM_value, float& Person_initial_1, float& Person_initial_2); // calculates Initial values for temperature sensors and accelerometer
+void Initial_values(float& Initial_AM_value, float& Person_initial_1, float& Person_initial_2); // calculates Initial values for temperature sensors and accelerometer
 unsigned long int time=0; // used for time stamp 
 /***************PPG Sensor ****************/
 DFRobot_Heartrate Heartrate(ANALOG_MODE);
 /***************Temperature Sensors ****************/
+const int Pin1 = A6, Pin2 = A7; // Temp sensor pin wire connected to analog pin 6
 float Person_initial_1, Person_initial_2; // Person's initial temperature values from each sensor
 float celsius1, celsius2; // Person's current temperature values from each sensor
 void Temperatures(const int Pin1, const int Pin2, float& celsius1, float& celsius2); // Calculates the current temperature values (which are averaged)
@@ -44,10 +45,12 @@ void setup(void) {
   Serial.begin(9600);
   Initiliazation_AM();
   Initialization_SD();
-  Initial_values(celsius1, celsius2, Initial_AM_value, Person_initial_1, Person_initial_2);
+  Initial_values(Initial_AM_value, Person_initial_1, Person_initial_2);
   while (!Serial) {
     ; // wait for serial port to connect.
   }
+  Serial.println(Person_initial_1);
+  Serial.println(Person_initial_2);
 }
 
 void loop() {
@@ -113,10 +116,10 @@ void loop() {
     }
 
   /**************************TEMPERATURE****************************************/
-    const int Pin1 = A6, Pin2 = A7; // Temp sensor pin wire connected to analog pin 6
     Temperatures(Pin1, Pin2, celsius1, celsius2);
-    float delta1 = celsius1 - Person_initial_1;//the change between the current temperature and the person's initial tempeperature values for both sensors
-    float delta2 = celsius2 - Person_initial_2;
+    float delta1, delta2;
+    delta1 = celsius1 - Person_initial_1;//the change between the current temperature and the person's initial tempeperature values for both sensors
+    delta2 = celsius2 - Person_initial_2;
 
   /**************************PPG**************************************/
    static int bpm_PPG;
@@ -129,7 +132,7 @@ void loop() {
     if(timer_flag2 == 0){
       timer_flag2 = 1;
       Data_line(time, bpm_breathing, bpm_PPG, celsius1, celsius2, delta1, delta2);
-      Write_to_file((char*)"/d.csv", time, bpm_breathing, bpm_PPG, celsius1, celsius2, delta1, delta2);
+      //Write_to_file((char*)"/d.csv", time, bpm_breathing, bpm_PPG, celsius1, celsius2, delta1, delta2);
     }
     set_timer_data(300); // output data rate 0.3 second
   }
@@ -194,13 +197,14 @@ float average;
   return average;
 }
 
-void Initial_values(float celsius1, float celsius2, float& Initial_AM_value, float& Person_initial_1, float& Person_initial_2){
+void Initial_values(float& Initial_AM_value, float& Person_initial_1, float& Person_initial_2){
   float sum2 = 0;
   float temp_average_1 = 0, temp_average_2 = 0;
   Serial.println("Configuring Sensors...");
   for(int i=1; i<=30; i++){
    float average = Acceleration();
     sum2+=average;
+    Temperatures(Pin1, Pin2, celsius1, celsius2);
     temp_average_1 += celsius1;
     temp_average_2 += celsius2;
     delay(100);
