@@ -45,22 +45,19 @@ void setup(void) {
   Serial.begin(9600);
   Initiliazation_AM();
   Initialization_SD();
-  Initial_values(Initial_AM_value, Person_initial_1, Person_initial_2);
   while (!Serial) {
     ; // wait for serial port to connect.
   }
-  Serial.println(Person_initial_1);
-  Serial.println(Person_initial_2);
 }
 
-void loop() {
-  /***************************RECORDING SETUP*************************/
+void loop() { /***************************RECORDING SETUP*************************/
   if (!reading) { // Starts recording of data once gotten a start input
     char c = 0;
     Serial.readBytes(&c, 1);
     if (c=='S') {
       reading=true;
       Serial.println("Starting...");
+      Initial_values(Initial_AM_value, Person_initial_1, Person_initial_2);
     }
   } 
   else {
@@ -72,7 +69,6 @@ void loop() {
         Serial.println("Stopping...");
       }
     }
-    
     /************************Accelerometer ************************/
     float breath_period;
     int motion_flag = 0; // used for filtering out high motion
@@ -132,7 +128,7 @@ void loop() {
     if(timer_flag2 == 0){
       timer_flag2 = 1;
       Data_line(time, bpm_breathing, bpm_PPG, celsius1, celsius2, delta1, delta2);
-      //Write_to_file((char*)"/d.csv", time, bpm_breathing, bpm_PPG, celsius1, celsius2, delta1, delta2);
+      Write_to_file((char*)"/d.csv", time, bpm_breathing, bpm_PPG, celsius1, celsius2, delta1, delta2);
     }
     set_timer_data(300); // output data rate 0.3 second
   }
